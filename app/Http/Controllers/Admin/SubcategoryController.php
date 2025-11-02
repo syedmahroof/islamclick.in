@@ -2,124 +2,81 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Http\Controllers\Controller;
 use App\Models\Subcategory;
 use App\Models\Category;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use App\Helpers\ActivityLogger;
 
-class SubcategoryController extends AdminController
+class SubcategoryController extends Controller
 {
-    /**
-     * @var string
-     */
-    protected $modelClass = Subcategory::class;
-
-    /**
-     * @var string
-     */
-    protected $resourceName = 'subcategory';
-
-    /**
-     * Validate the request data.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @param  int|null  $id
-     * @return array
-     */
-    protected function validateRequest(Request $request, $id = null): array
+    public function index()
     {
-        $rules = [
-            'name' => 'required|string|max:255|unique:subcategories,name',
+        $subcategories = Subcategory::with('category')->latest()->paginate(10);
+        return view('admin.subcategories.index', compact('subcategories'));
+    }
+
+    public function create()
+    {
+        $categories = Category::where('is_active', true)->get();
+        return view('admin.subcategories.create', compact('categories'));
+    }
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
             'category_id' => 'required|exists:categories,id',
-            'parent_id' => 'nullable|exists:subcategories,id',
+            'name' => 'required|string|max:255',
             'description' => 'nullable|string',
             'is_active' => 'boolean',
-            'order' => 'integer|min:0',
-            'icon' => 'nullable|string|max:50',
-        ];
+        ]);
 
-        if ($id) {
-            $rules['name'] .= ",{$id}";
-            
-            // Prevent setting a subcategory as its own parent
-            $rules['parent_id'] .= ",{$id},id";
-        }
+        $validated['slug'] = Str::slug($validated['name']);
+        $validated['is_active'] = $request->has('is_active');
 
-        $validated = $request->validate($rules);
+        $subcategory = Subcategory::create($validated);
+        ActivityLogger::created('Subcategory', $subcategory->id, $subcategory->toArray());
 
-        // Generate slug if not provided
-        if (!$request->has('slug') || empty($request->slug)) {
-            $validated['slug'] = Str::slug($validated['name']);
-        }
-
-        return $validated;
+        return redirect()->route('admin.subcategories.index')->with('success', 'Subcategory created successfully.');
     }
 
-    /**
-     * Get subcategories by category ID.
-     *
-     * @param  int  $categoryId
-     * @return \Illuminate\Http\JsonResponse
-     */
-    public function byCategory($categoryId): JsonResponse
+    public function show(Subcategory $subcategory)
     {
-        $subcategories = Subcategory::query()
-            ->where('category_id', $categoryId)
-            ->where('is_active', true)
-            ->orderBy('name')
-            ->get(['id', 'name', 'parent_id']);
-
-        return response()->json(['data' => $this->formatNested($subcategories)]);
+        return view('admin.subcategories.show', compact('subcategory'));
     }
 
-    /**
-     * Format subcategories in a nested structure.
-     *
-     * @param  \Illuminate\Database\Eloquent\Collection  $subcategories
-     * @param  int|null  $parentId
-     * @return array
-     */
-    protected function formatNested($subcategories, $parentId = null): array
+    public function edit(Subcategory $subcategory)
     {
-        $result = [];
-        
-        foreach ($subcategories->where('parent_id', $parentId) as $subcategory) {
-            $result[] = [
-                'id' => $subcategory->id,
-                'name' => $subcategory->name,
-                'children' => $this->formatNested($subcategories, $subcategory->id)
-            ];
-        }
-        
-        return $result;
+        $categories = Category::where('is_active', true)->get();
+        return view('admin.subcategories.edit', compact('subcategory', 'categories'));
     }
 
-    /**
-     * Get the index query.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Database\Eloquent\Builder
-     */
-    protected function getIndexQuery(Request $request)
+    public function update(Request $request, Subcategory $subcategory)
     {
-        $query = parent::getIndexQuery($request);
+        $validated = $request->validate([
+            'category_id' => 'required|exists:categories,id',
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'is_active' => 'boolean',
+        ]);
+
+        $oldValues = $subcategory->toArray();
+        $validated['slug'] = Str::slug($validated['name']);
+        $validated['is_active'] = $request->has('is_active');
+
+        $subcategory->update($validated);
+        ActivityLogger::updated('Subcategory', $subcategory->id, $oldValues, $subcategory->toArray());
+
+        return redirect()->route('admin.subcategories.index')->with('success', 'Subcategory updated successfully.');
+    }
+
+    public function destroy(Subcategory $subcategory)
+    {
+        $subcategoryData = $subcategory->toArray();
+        $subcategory->delete();
+        ActivityLogger::deleted('Subcategory', $subcategoryData['id'], $subcategoryData);
         
-        // Eager load relationships
-        $query->with(['category', 'parent']);
-        
-        // Filter by category if provided
-        if ($request->has('category_id')) {
-            $query->where('category_id', $request->category_id);
-        }
-        
-        // Filter by parent if provided
-        if ($request->has('parent_id')) {
-            $query->where('parent_id', $request->parent_id);
-        } else if ($request->boolean('only_parents', false)) {
-            $query->whereNull('parent_id');
-        }
-        
-        return $query;
+        return redirect()->route('admin.subcategories.index')->with('success', 'Subcategory deleted successfully.');
     }
 }
